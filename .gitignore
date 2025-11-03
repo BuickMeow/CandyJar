@@ -1,0 +1,84 @@
+# JUCE project specific ignores
+JuceLibraryCode/AppConfig.h
+JuceLibraryCode/JuceHeader.h
+JuceLibraryCode/*.mm
+JuceLibraryCode/*.cpp
+JUCE/
+
+# Drafts and Docs
+Docs/
+
+# Build directories
+cmake-build-*/
+Builds/
+build/
+
+# IDE specific files
+.idea/
+*.user
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.vcxproj*
+*.vcproj
+*.xcodeproj
+*.xcworkspace
+
+# OS generated files
+Thumbs.db
+.DS_Store
+*.swp
+*~
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.ipa
+*.msi
+
+# CLion
+cmake-build-*/
+
+# Visual Studio
+Debug/
+Release/
+x64/
+x86/
+*.pdb
+
+# Temporary files
+*.tmp
+*.temp
+
+# Log files
+*.log
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+Makefile
+*.cmake
+cmake_install.cmake
