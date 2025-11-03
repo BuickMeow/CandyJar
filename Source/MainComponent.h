@@ -10,7 +10,7 @@
 */
 class MainComponent  : public juce::Component,
                        public juce::Button::Listener,
-                       private juce::Thread
+                       private juce::Timer
 {
 public:
     //==============================================================================
@@ -26,6 +26,7 @@ private:
     //==============================================================================
     // Your private member variables go here...
     std::unique_ptr<juce::TextButton> openMidiButton;
+    std::unique_ptr<juce::TextButton> cancelLoadButton;
     std::unique_ptr<juce::TextEditor> outputText;
     std::unique_ptr<MidiParser> midiParser;
     std::unique_ptr<juce::FileChooser> fileChooser;
@@ -33,12 +34,22 @@ private:
     double progressValue;
     bool isLoading;
     juce::File fileToLoad;
+    std::future<bool> loadFuture;
+    std::atomic<bool> loadingCompleted {false};
+    std::atomic<bool> loadingResult {false};
+    std::atomic<double> elapsedTime {0.0};
+    juce::String resultMessage;
+    double storedStartTime;
     
-    // Thread methods
-    void run() override;
+    // 方法
     void loadMidiFile(const juce::File& file);
     void updateProgress(int percentage, const juce::String& message);
-    void loadingFinished(bool success, const juce::String& message, double elapsedTime);
+    void checkLoadingStatus();
+    void loadingFinished(bool success, const juce::String& message, double timeElapsed);
+    void displayStatistics();
+    
+    // Timer callback
+    void timerCallback() override;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

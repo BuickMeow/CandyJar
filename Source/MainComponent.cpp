@@ -2,7 +2,6 @@
 
 //==============================================================================
 MainComponent::MainComponent() : 
-    Thread("MidiLoaderThread"),
     progressValue(0.0), 
     isLoading(false)
 {
@@ -10,6 +9,12 @@ MainComponent::MainComponent() :
     openMidiButton = std::make_unique<juce::TextButton>("Open MIDI File");
     openMidiButton->addListener(this);
     addAndMakeVisible(openMidiButton.get());
+    
+    // 创建取消加载按钮
+    cancelLoadButton = std::make_unique<juce::TextButton>("Cancel Load");
+    cancelLoadButton->addListener(this);
+    cancelLoadButton->setVisible(false);
+    addAndMakeVisible(cancelLoadButton.get());
     
     // 创建进度条
     progressBar = std::make_unique<juce::ProgressBar>(progressValue);
@@ -28,18 +33,21 @@ MainComponent::MainComponent() :
     
     // 显示初始状态消息
     outputText->clear();
-    outputText->setText("MIDI file reader is ready.\n");
+    outputText->setText("Enhanced MIDI file reader is ready.\n");
     outputText->moveCaretToEnd();
     outputText->insertTextAtCaret("Click 'Open MIDI File' button to load a MIDI file.\n");
     outputText->moveCaretToEnd();
-    outputText->insertTextAtCaret("MIDI reading functionality is operational.\n");
+    outputText->insertTextAtCaret("Features: Progress tracking, statistics, multi-threading.\n");
     
     setSize (600, 400);
+    
+    // 启动定时器检查加载状态
+    startTimer(100); // 每100毫秒检查一次
 }
 
 MainComponent::~MainComponent()
 {
-    stopThread(1000);
+    stopTimer();
 }
 
 //==============================================================================
@@ -61,8 +69,12 @@ void MainComponent::resized()
     
     // 设置按钮和文本区域的位置
     auto area = getLocalBounds();
-    auto buttonArea = area.removeFromTop(40).withSizeKeepingCentre(150, 30);
-    openMidiButton->setBounds(buttonArea);
+    auto buttonArea = area.removeFromTop(40);
+    auto openButtonArea = buttonArea.removeFromLeft(buttonArea.getWidth() / 2).withSizeKeepingCentre(150, 30);
+    auto cancelButtonArea = buttonArea.withSizeKeepingCentre(150, 30);
+    
+    openMidiButton->setBounds(openButtonArea);
+    cancelLoadButton->setBounds(cancelButtonArea);
     
     // 设置进度条位置
     auto progressArea = area.removeFromTop(30).reduced(10, 5);
@@ -79,7 +91,7 @@ void MainComponent::buttonClicked (juce::Button* button)
         if (isLoading)
         {
             outputText->moveCaretToEnd();
-            outputText->insertTextAtCaret("Already loading a file. Please wait.\n");
+            outputText->insertTextAtCaret("Already loading a file. Please wait or cancel.\n");
             return;
         }
         
@@ -109,13 +121,24 @@ void MainComponent::buttonClicked (juce::Button* button)
             }
         });
     }
+    else if (button == cancelLoadButton.get())
+    {
+        if (isLoading)
+        {
+            midiParser->cancelLoading();
+            outputText->moveCaretToEnd();
+            outputText->insertTextAtCaret("Cancelling load operation...\n");
+        }
+    }
 }
 
 void MainComponent::loadMidiFile(const juce::File& file)
 {
     isLoading = true;
+    loadingCompleted = false;
     progressValue = 0.0;
     progressBar->setVisible(true);
+    cancelLoadButton->setVisible(true);
     fileToLoad = file;
     
     outputText->clear();
@@ -123,47 +146,32 @@ void MainComponent::loadMidiFile(const juce::File& file)
     outputText->moveCaretToEnd();
     outputText->repaint();
     
-    // 启动后台线程加载MIDI文件
-    startThread();
-}
-
-void MainComponent::run()
-{
     // 记录开始时间
-    auto startTime = juce::Time::getMillisecondCounterHiRes();
+    storedStartTime = juce::Time::getMillisecondCounterHiRes();
     
-    // 加载MIDI文件
-    bool success = false;
-    juce::String errorMessage = "Unknown error";
-    
-    try 
-    {
-        // 使用带进度回调的加载函数
-        success = midiParser->loadMidiFile(fileToLoad, [this](int progress, const juce::String& message) {
-            // 在主线程中更新进度
-            juce::MessageManager::callAsync([this, progress, message]() {
-                updateProgress(progress, message);
-            });
+    // 启动异步加载
+    loadFuture = midiParser->loadMidiFileAsync(file, [this](int progress, const juce::String& message) {
+        juce::MessageManager::callAsync([this, progress, message]() {
+            updateProgress(progress, message);
         });
-        errorMessage = midiParser->getLastErrorMessage();
-    }
-    catch (const std::exception& ex)
-    {
-        errorMessage = "Exception occurred: " + juce::String(ex.what());
-    }
-    catch (...)
-    {
-        errorMessage = "Unknown exception occurred";
-    }
-    
-    // 记录结束时间
-    auto endTime = juce::Time::getMillisecondCounterHiRes();
-    auto elapsedTime = endTime - startTime;
-    
-    // 在主线程中完成加载
-    juce::MessageManager::callAsync([this, success, errorMessage, elapsedTime]() {
-        loadingFinished(success, errorMessage, elapsedTime);
     });
+    
+    // 启动线程等待异步操作完成
+    std::thread([this]() {
+        // 等待异步操作完成
+        bool result = loadFuture.get();
+        
+        // 记录结束时间
+        auto endTime = juce::Time::getMillisecondCounterHiRes();
+        auto timeElapsed = endTime - storedStartTime;
+        
+        // 在主线程中完成加载
+        juce::MessageManager::callAsync([this, result, timeElapsed]() {
+            loadingCompleted = true;
+            loadingResult = result;
+            elapsedTime = timeElapsed;
+        });
+    }).detach();
 }
 
 void MainComponent::updateProgress(int percentage, const juce::String& message)
@@ -178,40 +186,77 @@ void MainComponent::updateProgress(int percentage, const juce::String& message)
     // 强制刷新显示
     outputText->repaint();
     progressBar->repaint();
-    
-    // 强制处理消息队列
-    juce::Timer::callPendingTimersSynchronously();
 }
 
-void MainComponent::loadingFinished(bool success, const juce::String& message, double elapsedTime)
+void MainComponent::checkLoadingStatus()
+{
+    if (loadingCompleted.load() && isLoading)
+    {
+        isLoading = false;
+        cancelLoadButton->setVisible(false);
+        
+        if (loadingResult.load())
+        {
+            loadingFinished(true, "MIDI file loaded successfully", elapsedTime.load());
+            displayStatistics();
+        }
+        else
+        {
+            loadingFinished(false, midiParser->getLastErrorMessage(), elapsedTime.load());
+        }
+        
+        loadingCompleted = false;
+    }
+}
+
+void MainComponent::loadingFinished(bool success, const juce::String& message, double timeElapsed)
 {
     if (success)
     {
-        const juce::MidiFile& loadedMidi = midiParser->getMidiFile();
         outputText->moveCaretToEnd();
-        outputText->insertTextAtCaret("Successfully loaded MIDI file!\n");
+        outputText->insertTextAtCaret("\nSuccessfully loaded MIDI file!\n");
         outputText->moveCaretToEnd();
-        outputText->insertTextAtCaret("Number of tracks: " + juce::String(loadedMidi.getNumTracks()) + "\n");
-        outputText->moveCaretToEnd();
-        outputText->insertTextAtCaret("Time format: " + juce::String(loadedMidi.getTimeFormat()) + "\n");
-        outputText->moveCaretToEnd();
-        outputText->insertTextAtCaret("Load time: " + juce::String(elapsedTime, 2) + " ms\n");
+        outputText->insertTextAtCaret("Load time: " + juce::String(timeElapsed, 2) + " ms\n");
     }
     else
     {
         outputText->moveCaretToEnd();
-        outputText->insertTextAtCaret("Failed to load MIDI file!\n");
+        outputText->insertTextAtCaret("\nFailed to load MIDI file!\n");
         outputText->moveCaretToEnd();
         outputText->insertTextAtCaret("Error: " + message + "\n");
         outputText->moveCaretToEnd();
-        outputText->insertTextAtCaret("Load time: " + juce::String(elapsedTime, 2) + " ms\n");
+        outputText->insertTextAtCaret("Load time: " + juce::String(timeElapsed, 2) + " ms\n");
     }
     
     // 保持进度条可见，显示最终结果
     progressValue = success ? 1.0 : 0.0; // 成功显示100%，失败显示0%
-    isLoading = false;
     
     // 强制刷新显示
     outputText->repaint();
     progressBar->repaint();
+}
+
+void MainComponent::displayStatistics()
+{
+    const MidiStatistics& stats = midiParser->getStatistics();
+    
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("\n--- MIDI File Statistics ---\n");
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("Total Tracks: " + juce::String(stats.totalTracks) + "\n");
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("Total Events: " + juce::String(stats.totalEvents) + "\n");
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("Total Notes: " + juce::String(stats.totalNotes) + "\n");
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("Duration: " + juce::String(stats.totalDuration, 2) + " ticks\n");
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("File Type: " + juce::String(stats.fileType) + "\n");
+    outputText->moveCaretToEnd();
+    outputText->insertTextAtCaret("Time Format: " + juce::String(stats.timeFormat) + "\n");
+}
+
+void MainComponent::timerCallback()
+{
+    checkLoadingStatus();
 }
