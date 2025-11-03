@@ -3,6 +3,7 @@ JuceLibraryCode/AppConfig.h
 JuceLibraryCode/JuceHeader.h
 JuceLibraryCode/*.mm
 JuceLibraryCode/*.cpp
+JuceLibraryCode/
 JUCE/
 
 # Drafts and Docs
